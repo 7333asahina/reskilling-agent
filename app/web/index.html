@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>AI実践研修 エージェント</title>
+  <!-- タブのアイコン。置かないとブラウザが favicon.ico を探しに行き、コンソールに 404 が残る -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%2300c853'/%3E%3Ctext x='16' y='22' font-family='system-ui,sans-serif' font-size='15' font-weight='700' fill='%23fff' text-anchor='middle'%3EAI%3C/text%3E%3C/svg%3E">
+  <style>
+    /* -----------------------------------------------------------------
+       チャット画面。ライブラリは使わず、CSS だけで作ってある。
+       色は :root の変数を変えれば全体が変わる。ここが「自分の UI にする」入口。
+       ----------------------------------------------------------------- */
+    :root {
+      --header:      #2f3a4a;   /* 上のバー */
+      --header-fg:   #ffffff;
+      --room:        #8fabd0;   /* 会話の背景 */
+      --bubble-me:   #8de055;   /* 自分の吹き出し */
+      --bubble-me-fg:#14210a;
+      --bubble-ai:   #ffffff;   /* 相手の吹き出し */
+      --bubble-ai-fg:#1a1a1a;
+      --stamp:       rgba(255,255,255,.85);  /* 時刻・実測値 */
+      --bar:         #f7f8fa;   /* 下の入力バー */
+      --bar-line:    #dfe3e8;
+      --field:       #ffffff;
+      --field-fg:    #1a1a1a;
+      --send:        #06c755;   /* 送信ボタン */
+      --err:         #ffe5e5;
+      --err-fg:      #8a1f1f;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --header:      #171a1f;
+        --room:        #1e2530;
+        --bubble-me:   #6fbb43;
+        --bubble-me-fg:#0d1607;
+        --bubble-ai:   #2b313b;
+        --bubble-ai-fg:#e8eaed;
+        --stamp:       rgba(255,255,255,.55);
+        --bar:         #14171b;
+        --bar-line:    #2a2f36;
+        --field:       #232830;
+        --field-fg:    #e8eaed;
+        --err:         #40232a;
+        --err-fg:      #ffb4b4;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Hiragino Sans", "Yu Gothic UI", sans-serif;
+      background: var(--room);
+      display: flex; flex-direction: column;
+      height: 100dvh; overflow: hidden;
+    }
+
+    /* --- 上のバー --- */
+    header {
+      background: var(--header); color: var(--header-fg);
+      padding: 12px 16px calc(12px + env(safe-area-inset-top)) 16px;
+      display: flex; align-items: center; gap: 10px; flex: none;
+    }
+    header .icon {
+      width: 32px; height: 32px; border-radius: 50%; flex: none;
+      background: var(--send); color: #fff;
+      display: grid; place-items: center; font-size: 15px; font-weight: 700;
+    }
+    header .name { font-size: 15px; font-weight: 600; line-height: 1.2; }
+    header .desc { font-size: 11px; opacity: .65; line-height: 1.3; }
+    header .head-text { min-width: 0; flex: 1; }
+    header .head-text .name, header .head-text .desc {
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .head-right { display: flex; align-items: center; gap: 8px; flex: none; font-size: 11px; }
+    .head-right button {
+      font: inherit; font-size: 11px; cursor: pointer; color: var(--header-fg);
+      background: rgba(255,255,255,.14); border: 0; padding: 5px 10px; border-radius: 999px;
+    }
+
+    /* --- 会話の中身 --- */
+    #log {
+      flex: 1; overflow-y: auto; overscroll-behavior: contain;
+      padding: 16px 12px 8px;
+      display: flex; flex-direction: column; gap: 14px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .day {
+      align-self: center; font-size: 11px; color: #fff;
+      background: rgba(0,0,0,.22); padding: 3px 12px; border-radius: 999px;
+    }
+
+    .msg { display: flex; gap: 8px; align-items: flex-end; max-width: 100%; }
+    .msg.ai { justify-content: flex-start; }
+    .msg.me { justify-content: flex-end; }
+
+    .avatar {
+      width: 34px; height: 34px; border-radius: 50%; flex: none;
+      background: var(--send); color: #fff;
+      display: grid; place-items: center; font-size: 15px; font-weight: 700;
+      margin-bottom: 18px;
+    }
+
+    .stack { display: flex; flex-direction: column; min-width: 0; max-width: min(78%, 520px); }
+    .msg.me .stack { align-items: flex-end; }
+
+    .bubble {
+      position: relative; padding: 9px 13px; border-radius: 18px;
+      font-size: 15px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+    }
+    /* しっぽ。三角形を吹き出しの外側に描く */
+    .bubble::after { content: ""; position: absolute; bottom: 7px; width: 0; height: 0; }
+    .msg.ai .bubble {
+      background: var(--bubble-ai); color: var(--bubble-ai-fg); border-top-left-radius: 4px;
+    }
+    .msg.ai .bubble::after {
+      left: -6px; border-right: 8px solid var(--bubble-ai);
+      border-top: 6px solid transparent; border-bottom: 6px solid transparent;
+    }
+    .msg.me .bubble {
+      background: var(--bubble-me); color: var(--bubble-me-fg); border-top-right-radius: 4px;
+    }
+    .msg.me .bubble::after {
+      right: -6px; border-left: 8px solid var(--bubble-me);
+      border-top: 6px solid transparent; border-bottom: 6px solid transparent;
+    }
+    .msg.err .bubble { background: var(--err); color: var(--err-fg); }
+    .msg.err .bubble::after { border-right-color: var(--err); }
+
+    .stamp { font-size: 10.5px; color: var(--stamp); margin: 4px 4px 0; line-height: 1.6; }
+    .stamp span { cursor: help; }
+    .stamp b { font-weight: 600; }
+    .stamp .dot { opacity: .45; margin: 0 5px; }
+
+    /* --- 考え中の三点 --- */
+    .dots { display: inline-flex; gap: 4px; padding: 3px 0; }
+    .dots i {
+      width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .3;
+      animation: blink 1.2s infinite;
+    }
+    .dots i:nth-child(2) { animation-delay: .2s; }
+    .dots i:nth-child(3) { animation-delay: .4s; }
+    @keyframes blink { 0%,60%,100% { opacity: .25; } 30% { opacity: .85; } }
+
+    /* --- 定型質問のボタン --- */
+    #samples {
+      flex: none; display: flex; gap: 8px; padding: 8px 12px;
+      overflow-x: auto; scrollbar-width: none;
+    }
+    #samples::-webkit-scrollbar { display: none; }
+    #samples button {
+      flex: none; font: inherit; font-size: 12.5px; white-space: nowrap; cursor: pointer;
+      background: rgba(255,255,255,.9); color: #2f3a4a; border: 0;
+      padding: 6px 14px; border-radius: 999px;
+    }
+    @media (prefers-color-scheme: dark) {
+      #samples button { background: rgba(255,255,255,.12); color: #e8eaed; }
+    }
+
+    /* --- 下の入力バー --- */
+    form {
+      flex: none; background: var(--bar); border-top: 1px solid var(--bar-line);
+      padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+      display: flex; align-items: flex-end; gap: 8px;
+    }
+    textarea {
+      flex: 1; resize: none; font: inherit; font-size: 15px; line-height: 1.5;
+      padding: 9px 14px; border: 1px solid var(--bar-line); border-radius: 20px;
+      background: var(--field); color: var(--field-fg);
+      max-height: 120px; min-height: 40px;
+    }
+    textarea:focus { outline: 2px solid var(--send); outline-offset: -1px; }
+    #send {
+      flex: none; width: 40px; height: 40px; border: 0; border-radius: 50%;
+      background: var(--send); color: #fff; cursor: pointer;
+      display: grid; place-items: center; padding: 0;
+    }
+    #send:disabled { opacity: .4; cursor: default; }
+    #send svg { width: 20px; height: 20px; }
+
+    /* --- ログインしていないときの画面（第4回から出る）--- */
+    #gate {
+      position: fixed; inset: 0; z-index: 10; background: var(--room);
+      display: grid; place-items: center; padding: 24px;
+    }
+    [hidden] { display: none !important; }
+    .gate-card {
+      background: var(--bubble-ai); color: var(--bubble-ai-fg);
+      border-radius: 16px; padding: 32px 28px; max-width: 380px; width: 100%;
+      text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,.18);
+    }
+    .gate-icon {
+      width: 52px; height: 52px; border-radius: 50%; background: var(--send); color: #fff;
+      display: grid; place-items: center; font-size: 20px; font-weight: 700; margin: 0 auto 16px;
+    }
+    .gate-card h1 { font-size: 17px; margin: 0 0 8px; }
+    .gate-card p { font-size: 13px; line-height: 1.7; margin: 0 0 20px; opacity: .8; }
+    .gate-card #login {
+      font: inherit; font-size: 15px; cursor: pointer; width: 100%;
+      background: var(--send); color: #fff; border: 0; padding: 12px; border-radius: 10px;
+    }
+    .gate-card .gate-note { font-size: 11px; margin: 16px 0 0; opacity: .55; }
+    .gate-card.error .gate-icon { background: #d9534f; }
+    #whoami { font-size: 12px; opacity: .7; margin-right: 8px; }
+  </style>
+</head>
+<body>
+
+  <!-- ===== 画面の骨組み =====
+       見た目（色・文言・並び）は自由に変えてよい。
+       ただし id の付いた要素（log・samples・form・message・send・reset・subtitle）は
+       下の JavaScript が使っているので、消したり名前を変えたりしない。 -->
+
+  <header>
+    <div class="icon">AI</div>
+    <div class="head-text">
+      <div class="name">AI実践研修 エージェント</div>
+      <div class="desc" id="subtitle">ローカル / echo</div>
+    </div>
+    <div class="head-right">
+      <span id="whoami"></span>
+      <button type="button" id="reset">新しい会話</button>
+      <button type="button" id="logout" hidden>ログアウト</button>
+    </div>
+  </header>
+
+  <!-- ログインしていない間だけ出る。手元（uvicorn）では出ない -->
+  <div id="gate" hidden>
+    <div class="gate-card">
+      <div class="gate-icon">AI</div>
+      <h1>AI実践研修 エージェント</h1>
+      <p id="gate-msg">利用するにはログインが必要です。</p>
+      <button type="button" id="login">ログイン</button>
+      <p class="gate-note">アカウントは自分で作ります。誰でも登録できる設定にはしていません。</p>
+    </div>
+  </div>
+
+  <div id="log">
+    <div class="day" id="today"></div>
+  </div>
+
+  <div id="samples">
+    <button type="button">いま何時？</button>
+    <button type="button">今日は何曜日？</button>
+    <button type="button">生成AIのRAGとは何か、3行で説明して</button>
+    <button type="button">議事録のテンプレートを作って</button>
+  </div>
+
+  <form id="form">
+    <textarea id="message" rows="1" placeholder="メッセージを入力" autofocus></textarea>
+    <button id="send" type="submit" aria-label="送信">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M2.2 21.2 23 12 2.2 2.8l-.1 7.2L17 12 2.1 14z"/></svg>
+    </button>
+  </form>
+
+<script>
+  // ===================================================================
+  // ログイン（Cognito / 認可コード ＋ PKCE）
+  //
+  // **手元で動かしているときは、ここは何もしない。**config.json が無いためローカルと判断する。
+  // 第4回で AWS に載せると config.json が置かれ、ログインが要るようになる。
+  //
+  // ブラウザで動くアプリに秘密鍵は持たせられない。開発者ツールで見えてしまう。
+  // そこで PKCE を使う。
+  //   1. 合言葉（code_verifier）をその場で作り、手元に隠しておく
+  //   2. そのハッシュ（code_challenge）だけを Cognito に渡してログイン画面へ飛ぶ
+  //   3. 戻ってきた引換券（code）と、隠しておいた合言葉を一緒に出してトークンをもらう
+  // 引換券だけ横取りされても、合言葉が無いのでトークンには換えられない。
+  // ===================================================================
+
+  let CFG = null;          // config.json（deploy_web.py が書き出す）。手元では null のまま
+  let LOCAL = false;       // 手元で動かしているか
+
+  // API の宛先。**画面から API を呼ぶところは、必ずこれを頭に付ける。**
+  //   手元 : 空文字。同じサーバなので `/api/chat` がそのまま届く
+  //   AWS  : config.json が指す Lambda。画面は CloudFront から配られるので、相対パスでは届かない
+  const apiBase = () => (CFG ? CFG.apiBase : "");
+  const KEY = "s00.auth";  // トークンの保管場所の名前
+
+  const store = {
+    get()  { try { return JSON.parse(sessionStorage.getItem(KEY) || "null"); } catch { return null; } },
+    set(v) { try { sessionStorage.setItem(KEY, JSON.stringify(v)); } catch {} },
+    clear(){ try { sessionStorage.removeItem(KEY); } catch {} },
+  };
+
+  const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const sha256 = (s) => crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  const randomString = (len = 64) => {
+    const a = new Uint8Array(len); crypto.getRandomValues(a);
+    return Array.from(a, b => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"[b % 66]).join("");
+  };
+
+  async function startLogin() {
+    const verifier = randomString();
+    const state = randomString(24);
+    sessionStorage.setItem("s00.pkce", verifier);
+    sessionStorage.setItem("s00.state", state);
+    const q = new URLSearchParams({
+      client_id: CFG.clientId, response_type: "code",
+      scope: "openid email profile", redirect_uri: CFG.redirectUri,
+      state, code_challenge: b64url(await sha256(verifier)), code_challenge_method: "S256",
+    });
+    location.assign(`${CFG.cognitoDomain}/oauth2/authorize?${q}`);
+  }
+
+  function logout() {
+    store.clear();
+    const q = new URLSearchParams({ client_id: CFG.clientId, logout_uri: CFG.redirectUri });
+    location.assign(`${CFG.cognitoDomain}/logout?${q}`);
+  }
+
+  async function exchangeToken(body) {
+    const res = await fetch(`${CFG.cognitoDomain}/oauth2/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(body),
+    });
+    if (!res.ok) throw new Error("トークンを取得できませんでした（" + res.status + "）");
+    const t = await res.json();
+    const s = store.get() || {};
+    store.set({
+      idToken: t.id_token,
+      refreshToken: t.refresh_token || s.refreshToken,
+      // 少し早めに切れた扱いにする。境目ちょうどで失敗するのを避ける
+      expiresAt: Date.now() + (t.expires_in - 60) * 1000,
+    });
+  }
+
+  // **画面のどこからでも、送信の直前にこれを呼ぶ。**期限が近ければ静かに取り直す
+  async function getIdToken() {
+    if (LOCAL) return null;
+    const s = store.get();
+    if (s && s.idToken && Date.now() < s.expiresAt) return s.idToken;
+    if (!s || !s.refreshToken) { store.clear(); return null; }
+    try {
+      await exchangeToken({ grant_type: "refresh_token", client_id: CFG.clientId, refresh_token: s.refreshToken });
+      return store.get().idToken;
+    } catch { store.clear(); return null; }
+  }
+
+  function claimsOf(idToken) {
+    try { return JSON.parse(atob(idToken.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))); }
+    catch { return {}; }
+  }
+
+  function showGate(message, isError) {
+    const gate = document.getElementById("gate");
+    gate.hidden = false;
+    if (message) document.getElementById("gate-msg").textContent = message;
+    gate.querySelector(".gate-card").classList.toggle("error", !!isError);
+    document.getElementById("login").hidden = !!isError;
+  }
+
+  // どこで失敗しても、白い画面や無反応で終わらせない
+  window.addEventListener("unhandledrejection", (e) => {
+    if (!LOCAL) showGate("エラーが発生しました: " + (e.reason?.message || e.reason), true);
+  });
+
+  async function boot() {
+    // 設定はデプロイのときに書き出される（deploy_web.py）。コードに埋め込まない。
+    // **手元には無い。**読めなければローカルと判断して、ログインを求めない。
+    // fetch は 404 でも例外を投げない。さらに FastAPI の 404 は {"detail":"Not Found"} という
+    // 正しい JSON を返すので、json() も通ってしまう。**res.ok と中身の両方を見る。**
+    try {
+      const res = await fetch("./config.json", { cache: "no-store" });
+      if (!res.ok) throw new Error("config.json がない");
+      const cfg = await res.json();
+      if (!cfg || !cfg.cognitoDomain) throw new Error("config.json の中身がない");
+      CFG = cfg;   // **中身を確かめてから入れる。**手元では null のままにする（下の送信先の判定がこれを見る）
+    } catch {
+      LOCAL = true;
+      onReady();
+      return;
+    }
+
+    document.getElementById("login").addEventListener("click", async () => {
+      try { await startLogin(); }
+      catch (e) { showGate("ログインを開始できませんでした: " + e, true); }
+    });
+    document.getElementById("logout").addEventListener("click", () => logout());
+
+    // ログイン画面から戻ってきたところ（?code=... が付いている）
+    const url = new URL(location.href);
+    const code = url.searchParams.get("code");
+    if (code) {
+      const verifier = sessionStorage.getItem("s00.pkce");
+      // state が一致しないものは受け取らない（別サイトから踏まされた戻りを弾く）
+      if (url.searchParams.get("state") !== sessionStorage.getItem("s00.state") || !verifier) {
+        showGate("ログインの戻りを確認できませんでした。もう一度お試しください。", false);
+        history.replaceState({}, "", location.pathname);
+        return;
+      }
+      try {
+        await exchangeToken({
+          grant_type: "authorization_code", client_id: CFG.clientId,
+          code, redirect_uri: CFG.redirectUri, code_verifier: verifier,
+        });
+      } catch (e) {
+        showGate(String(e), true); return;
+      } finally {
+        sessionStorage.removeItem("s00.pkce");
+        sessionStorage.removeItem("s00.state");
+        history.replaceState({}, "", location.pathname);   // アドレスバーから code を消す
+      }
+    } else if (url.searchParams.get("error")) {
+      showGate(`ログインできませんでした: ${url.searchParams.get("error_description") || url.searchParams.get("error")}`, false);
+      history.replaceState({}, "", location.pathname);
+      return;
+    }
+
+    const token = await getIdToken();
+    if (!token) { showGate(); return; }
+
+    document.getElementById("gate").hidden = true;
+    document.getElementById("logout").hidden = false;
+    const c = claimsOf(token);
+    document.getElementById("whoami").textContent = c.email || c["cognito:username"] || "";
+    onReady();
+  }
+</script>
+
+<script>
+  // ===================================================================
+  // 画面の動き。サーバとのやり取りは send() の fetch 1か所だけ。
+  //   POST /api/chat  { message, session_id }  →  { reply, turns, tokens … }
+  // この呼び方と返る形は第15回まで変わらない。変えるのは見た目だけにする。
+  // ===================================================================
+
+  // --- 会話ID。サーバが「どの会話の続きか」を知るために毎回同じ ID を送る（第6回で効く）
+  const SID_KEY = "s00.session";
+  function sessionId() {
+    let id = null;
+    try { id = localStorage.getItem(SID_KEY); } catch {}
+    if (!id) {
+      id = (crypto.randomUUID?.() || String(Date.now())).replace(/-/g, "");
+      try { localStorage.setItem(SID_KEY, id); } catch {}
+    }
+    return id;
+  }
+
+  const form = document.getElementById("form");
+  const box  = document.getElementById("message");
+  const btn  = document.getElementById("send");
+  const log  = document.getElementById("log");
+
+  const today = () => new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" });
+  const hhmm  = () => new Date().toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+  document.getElementById("today").textContent = today();
+
+  // 「新しい会話」：画面を消して ID を作り直す
+  function resetConversation() {
+    try { localStorage.removeItem(SID_KEY); } catch {}
+    log.innerHTML = "";
+    const day = document.createElement("div");
+    day.className = "day";
+    day.textContent = today();
+    log.appendChild(day);
+    greet();
+  }
+  document.getElementById("reset").addEventListener("click", resetConversation);
+
+  // 定型質問のボタンを押したら、その場で送る
+  document.querySelectorAll("#samples button").forEach(b => {
+    b.addEventListener("click", () => { box.value = b.textContent; send(); });
+  });
+
+  // 入力欄を中身の量に合わせて伸ばす
+  box.addEventListener("input", () => {
+    box.style.height = "auto";
+    box.style.height = Math.min(box.scrollHeight, 120) + "px";
+  });
+
+  // Enter で送信、Shift+Enter で改行（PC の場合）
+  box.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && window.matchMedia("(pointer:fine)").matches) {
+      e.preventDefault();
+      send();
+    }
+  });
+
+  // 吹き出しを1つ足す。side は "me" か "ai"
+  function addMessage(side, text, opts = {}) {
+    const msg = document.createElement("div");
+    msg.className = "msg " + side + (opts.error ? " err" : "");
+    if (side === "ai") {
+      const av = document.createElement("div");
+      av.className = "avatar";
+      av.textContent = "AI";
+      msg.appendChild(av);
+    }
+    const stack = document.createElement("div");
+    stack.className = "stack";
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    if (opts.typing) {
+      bubble.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
+    } else {
+      bubble.textContent = text;
+    }
+    const stamp = document.createElement("div");
+    stamp.className = "stamp";
+    stamp.textContent = opts.typing ? "" : hhmm();
+    stack.append(bubble, stamp);
+    msg.appendChild(stack);
+    log.appendChild(msg);
+    log.scrollTop = log.scrollHeight;
+    return { msg, bubble, stamp };
+  }
+
+  // 吹き出しの下に実測値を出す。第5回から本物の数字が入る。
+  // 用語は英語のまま出す。CloudWatch Logs や AWS の画面で見る語と揃えるため。
+  const n = (v) => Number(v).toLocaleString("en-US");
+  function stampWithMetrics(stamp, d) {
+    const tools = (d.tools_used && d.tools_used.length) ? d.tools_used.join(", ") : "none";
+    const dot = '<span class="dot">·</span>';
+    stamp.innerHTML =
+      `<span title="返答が返ってきた時刻">${hhmm()}</span>` + dot +
+      `<span title="モデルを呼んだ回数。tool を1回使うと1増える">turns <b>${d.turns}</b></span>` + dot +
+      `<span title="今回モデルに送った過去の発言の数">history <b>${d.history_messages ?? 0}</b></span>` + dot +
+      `<span title="モデルが呼び出した tool の名前">tool <b>${tools}</b></span>` + dot +
+      `<span title="やり取りしたトークン数。料金はこの数で決まる">tokens <b>${n(d.input_tokens)}</b> in / <b>${n(d.output_tokens)}</b> out</span>` + dot +
+      `<span title="サーバ側で処理にかかった時間"><b>${n(d.elapsed_ms)}</b> ms</span>`;
+  }
+
+  // --- 送信。サーバを呼ぶのはここだけ ---
+  async function send() {
+    const message = box.value.trim();
+    if (!message || btn.disabled) return;
+
+    addMessage("me", message);
+    box.value = "";
+    box.style.height = "auto";
+    btn.disabled = true;
+
+    const pending = addMessage("ai", "", { typing: true });
+
+    try {
+      // 宛先は2つに分かれる。
+      //   手元      : 同じサーバの /api/chat（CFG が無い）
+      //   AWS       : CloudFront から配られた画面が、別ドメインの Lambda を呼ぶ
+      const base = apiBase();
+      const token = await getIdToken();
+      const headers = { "Content-Type": "application/json" };
+      // ログインしているときだけ付ける。手元では付かない
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch(`${base}/api/chat`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ message, session_id: sessionId() })
+      });
+      const raw = await res.text();
+
+      if (res.status === 401 && !LOCAL) {
+        // 期限切れ。ためたトークンを捨てて、ログイン画面に戻す
+        store.clear();
+        pending.msg.remove();
+        showGate("ログインの有効期限が切れました。もう一度ログインしてください。", false);
+        return;
+      }
+      if (!res.ok) {
+        pending.msg.classList.add("err");
+        let detail = raw;
+        try { detail = JSON.parse(raw).detail ?? raw; } catch (_) {}
+        pending.bubble.textContent = `エラー（HTTP ${res.status}）\n${detail}`;
+        pending.stamp.textContent = hhmm();
+        return;
+      }
+
+      const data = JSON.parse(raw);
+      pending.bubble.textContent = data.reply;
+      stampWithMetrics(pending.stamp, data);
+      // どこで動いているか（第4回に /healthz から入る）＋ モデル名
+      document.getElementById("subtitle").textContent = (window.runningAt || "ローカル") + " / " + data.model;
+    } catch (e) {
+      pending.msg.classList.add("err");
+      pending.bubble.textContent = "通信に失敗しました\n" + e;
+      pending.stamp.textContent = hhmm();
+    } finally {
+      btn.disabled = false;
+      log.scrollTop = log.scrollHeight;
+      box.focus();
+    }
+  }
+
+  form.addEventListener("submit", (e) => { e.preventDefault(); send(); });
+
+  function greet() {
+    addMessage("ai", "こんにちは。何かお手伝いできることはありますか。\n下のボタンを押すとそのまま質問できます。");
+  }
+
+  // 画面の準備ができたときに、boot() から1回だけ呼ばれる。
+  // **API を呼ぶ処理は、ここから呼ぶ。**これより前は apiBase() の宛先がまだ決まっていない。
+  function onReady() {
+    greet();
+  }
+
+  // **onReady() を直接呼ばない。**ログインの確認が済んでから boot() が呼ぶ
+  boot();
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+# バージョンは固定する。固定しないと「昨日動いたものが今日動かない」が起きる。
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pydantic-settings==2.15.0
+# 第4回：Secrets Manager を読む。第5回の Bedrock（LLM）でも同じライブラリを使う
+boto3==1.43.89
+# 第4回：ログインしている人かどうかを確かめる。Cognito が発行したトークンの署名を検証する
+pyjwt[crypto]==2.13.0
