@@ -113,3 +113,13 @@ def chat(req: ChatRequest, user: dict[str, Any] = Depends(current_user)) -> Chat
         "chars": len(req.message), "session_id": req.session_id, "user": user.get("sub", "")}})
     reply = f"受け取りました: {req.message}"
     return ChatResponse(reply=reply, elapsed_ms=int((time.monotonic() - started) * 1000))
+
+@app.get("/api/suggestions")
+def suggestions() -> list[str]:
+    """画面の定型質問ボタン。ここを変えると、画面のボタンが変わる（3-2 で画面側をつなぐ）。"""
+    return [
+        "今週の予定を教えて",
+        "今日は何曜日？",
+        "生成AIのRAGとは何か、3行で説明して",
+        "議事録のテンプレートを作って",
+    ]
