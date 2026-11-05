@@ -243,10 +243,6 @@
   </div>
 
   <div id="samples">
-    <button type="button">いま何時？</button>
-    <button type="button">今日は何曜日？</button>
-    <button type="button">生成AIのRAGとは何か、3行で説明して</button>
-    <button type="button">議事録のテンプレートを作って</button>
   </div>
 
   <form id="form">
@@ -464,9 +460,24 @@
   document.getElementById("reset").addEventListener("click", resetConversation);
 
   // 定型質問のボタンを押したら、その場で送る
-  document.querySelectorAll("#samples button").forEach(b => {
-    b.addEventListener("click", () => { box.value = b.textContent; send(); });
-  });
+  // document.querySelectorAll("#samples button").forEach(b => {
+  //   b.addEventListener("click", () => { box.value = b.textContent; send(); });
+  // });
+  // 定型質問のボタンを、サーバの /api/suggestions から作る
+  async function loadSuggestions() {
+    const res = await fetch(`${apiBase()}/api/suggestions`);
+    const items = await res.json();                 // ["いま何時？", ...] という文字列のリスト
+    const bar = document.getElementById("samples");
+    bar.innerHTML = "";
+    for (const text of items) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = text;
+      b.addEventListener("click", () => { box.value = text; send(); });
+      bar.appendChild(b);
+    }
+  }
+
 
   // 入力欄を中身の量に合わせて伸ばす
   box.addEventListener("input", () => {
@@ -597,6 +608,7 @@
   // **API を呼ぶ処理は、ここから呼ぶ。**これより前は apiBase() の宛先がまだ決まっていない。
   function onReady() {
     greet();
+    loadSuggestions();
   }
 
   // **onReady() を直接呼ばない。**ログインの確認が済んでから boot() が呼ぶ
