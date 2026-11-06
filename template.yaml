@@ -1,0 +1,344 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  AI実践研修 エージェント（第4回時点）。FastAPI のコンテナを Lambda で動かし、
+  画面は S3 に置いて CloudFront から配る。入口には Cognito のログインを付ける。
+  すべてのリソース名は StudentId で始まる。**すべて DeletionPolicy: Delete。**
+  スタックを消せば跡形も残らない（ECR と作業用 S3 は別。03-デプロイ手順書 §5）。
+
+# ----------------------------------------------------------------------------
+# 差し替えたい値はここに集める。コードやリソース定義に直接書かない。
+# 値は samconfig.toml の parameter_overrides から渡ってくる
+# ----------------------------------------------------------------------------
+Parameters:
+  StudentId:
+    Type: String
+    AllowedPattern: '^[a-z][a-z0-9]*-2611$'
+    Description: 受講者 ID。すべてのリソース名の先頭に付く（第1回 04 の命名規則）
+
+  AppName:
+    Type: String
+    Default: AI実践研修 エージェント
+    Description: 画面の上に出す名前。ここを変えて再デプロイすると、コードを触らずに画面が変わる
+
+  RequireAuth:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >
+      ログインを必須にするか。**true にしておく。**
+      false にすると、URL を知っている人が誰でも自分のアプリを使えてしまう
+
+  PermissionsBoundaryArn:
+    Type: String
+    Default: ''
+    Description: >
+      この Lambda のロールに付ける権限境界。**受講者は必ず渡す**（make_samconfig.py が入れる）。
+      これが無いと、自分より強いロールを作れてしまうので、IAM 側で作成が拒否される
+
+Conditions:
+  HasBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, '']]
+
+Globals:
+  Function:
+    # 1リクエストで積み上がるコストの上限。15分にしない
+    Timeout: 30
+    MemorySize: 512
+    # 全員 x86_64 に揃える。Dockerfile の --platform=linux/amd64 と対にする
+    Architectures: [x86_64]
+
+Resources:
+
+  # --- ログ ------------------------------------------------------------------
+  # 自分で作る。Lambda に任せると保持期間が「無期限」になり、ずっと課金され続ける
+  AgentLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${StudentId}-agent'
+      RetentionInDays: 7
+
+  # --- アプリ本体 ------------------------------------------------------------
+  AgentFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: AgentLogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      FunctionName: !Sub '${StudentId}-agent'
+      Description: >-
+        FastAPI + Lambda Web Adapter。Handler を書かないのは、コンテナの CMD（uvicorn）が
+        そのまま動くため。Lambda のイベントと HTTP の変換は /opt/extensions/lambda-adapter が行う
+      PackageType: Image
+      # SAM が作るロールの上限。受講者はこれを付けないとデプロイできない
+      PermissionsBoundary: !If [HasBoundary, !Ref PermissionsBoundaryArn, !Ref 'AWS::NoValue']
+      # 手元の .env に相当するもの。Lambda は .env を読まない（.dockerignore で入れていない）
+      Environment:
+        Variables:
+          STUDENT_ID: !Ref StudentId
+          APP_ENV: aws
+          APP_NAME: !Ref AppName
+          LOG_LEVEL: INFO
+          # 鍵そのものではなく「鍵の名前」だけを渡す。値は Secrets Manager から実行時に読む
+          DEMO_API_KEY_SECRET_NAME: !Sub '${StudentId}/demo-api-key'
+          # ログインを確かめるのに要る3つ。**アプリの中で自分で検証する**（app/auth.py）
+          REQUIRE_AUTH: !Ref RequireAuth
+          COGNITO_USER_POOL_ID: !Ref UserPool
+          COGNITO_CLIENT_ID: !Ref UserPoolClient
+      FunctionUrlConfig:
+        # NONE にする。**認証が無いという意味ではない。**
+        # 関数 URL が選べるのは AWS_IAM か NONE の2つだけで、Cognito のオーソライザーが無い。
+        # AWS_IAM にするとブラウザから署名できず、画面から呼べなくなる。
+        # だから NONE にしたうえで、届いたトークンを app/auth.py で自分で確かめる
+        AuthType: NONE
+        InvokeMode: BUFFERED
+        # 画面は CloudFront から、API はこの関数 URL から配られる。
+        # **出どころ（オリジン）が違うので、ブラウザは既定でこの通信を止める。**
+        # 「このオリジンからなら受け付ける」と明示するのが CORS。
+        # 無いと画面に「通信に失敗しました TypeError: Failed to fetch」だけが出る。
+        # curl は CORS を見ないので、**コマンドでは通るのにブラウザだけ失敗する**
+        Cors:
+          AllowOrigins:
+            - !Sub 'https://${WebDistribution.DomainName}'
+          # OPTIONS は書かない。プリフライト（OPTIONS）は関数 URL が自動で返すので、
+          # ここに入れると「指定できない値」として弾かれる
+          AllowMethods: [GET, POST]
+          # **Authorization を入れ忘れるとトークンを送れない。**実際にいちばんやる間違い
+          AllowHeaders: [content-type, authorization]
+          MaxAge: 300
+      Policies:
+        # Secrets Manager は「この1件だけ」読める。名前の末尾に AWS が付ける6文字ぶんを * にする
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${StudentId}/demo-api-key-*'
+      Tags:
+        Project: reskilling
+        Owner: !Ref StudentId
+        StudentId: !Ref StudentId
+    Metadata:
+      DockerContext: .
+      Dockerfile: Dockerfile
+      DockerTag: !Sub '${StudentId}-latest'
+
+  # --- 関数 URL を誰でも呼べるようにする許可 ----------------------------------
+  # AuthType: NONE と書いただけでは呼べない。「誰が呼べるか」の許可を2つ足す。
+  # 2025年10月から、InvokeFunctionUrl と InvokeFunction の両方が要る。
+  # どちらが欠けても返るのは同じ 403 Forbidden なので、片方だけ付けて詰まる。
+  AgentFunctionUrlPublicPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt AgentFunction.Arn
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      # この行が要。付け忘れると「IAM 署名があれば誰でも」という別の意味になる
+      FunctionUrlAuthType: NONE
+
+  AgentFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt AgentFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: '*'
+      # 「関数 URL 経由のときだけ」に限定する。無いと AWS の API から直接呼ぶことまで誰にでも許す
+      InvokedViaFunctionUrl: true
+
+  # --- 画面の置き場 ----------------------------------------------------------
+  # 画面は Lambda から配らない。S3 に置き、CloudFront から配る。
+  # Lambda が返すのは API だけになる（＝画面を見るだけの人が Lambda を起こさない）
+  WebBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      # S3 の名前は世界中で一意でないといけないのでアカウント ID を付ける
+      BucketName: !Sub '${StudentId}-web-${AWS::AccountId}'
+      # バケットは非公開のまま。CloudFront だけが読める（下の OAC）
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+
+  # OAC（オリジンアクセスコントロール）。
+  # 「この CloudFront からの読み取りだけ許す」という仕組み。
+  # これが無いとバケットを公開する羽目になり、CloudFront を迂回して直接読まれる
+  WebOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${StudentId}-web-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontOnly
+            Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub '${WebBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                # このディストリビューション以外は読めない
+                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${WebDistribution}'
+
+  WebDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub '${StudentId} 研修エージェントの画面'
+        Enabled: true
+        DefaultRootObject: index.html
+        # 北米・欧州・アジア。日本の受講者が使うのでアジアを含む PriceClass_200 にする
+        PriceClass: PriceClass_200
+        HttpVersion: http2and3
+        Origins:
+          - Id: web-s3
+            DomainName: !GetAtt WebBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt WebOriginAccessControl.Id
+            # OAC を使うので、旧方式（OAI）は空にしておく。省略や空マップは弾かれる
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: web-s3
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          Compress: true
+          # AWS が用意している既定のポリシー（CachingOptimized）
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        CustomErrorResponses:
+          # ログイン後の戻り先など、実体の無いパスに来たら index.html を返す
+          - ErrorCode: 403
+            ResponseCode: '200'
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: '200'
+            ResponsePagePath: /index.html
+      Tags:
+        - { Key: Project, Value: reskilling }
+        # **このタグは消さないこと。** CloudFront は名前で絞れないので、
+        # 「自分のものか」を IAM がこのタグで確かめている。無いと作成が拒否される
+        - { Key: StudentId, Value: !Ref StudentId }
+
+  # --- ログイン --------------------------------------------------------------
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      UserPoolName: !Sub '${StudentId}-users'
+      # 管理者だけがユーザーを作れる。
+      # 誰でも登録できる状態にすると、URL を見つけた人が登録して課金させられる
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      MfaConfiguration: 'OFF'
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - { Name: verified_email, Priority: 1 }
+      UserPoolTags:
+        Project: reskilling
+        # **このタグも消さないこと。**理由は CloudFront と同じ
+        StudentId: !Ref StudentId
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub '${StudentId}-web-client'
+      UserPoolId: !Ref UserPool
+      # ブラウザで動くアプリなので、秘密鍵は持たせられない（開発者ツールで見えてしまう）。
+      # 代わりに PKCE という仕組みで、横取りされたコードを使えなくする
+      GenerateSecret: false
+      AllowedOAuthFlows: [code]
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes: [openid, email, profile]
+      SupportedIdentityProviders: [COGNITO]
+      # 戻り先は自分の CloudFront。**関数 URL ではない。**
+      # 関数 URL を指すと、Lambda → クライアント → 関数 URL で参照が一周してデプロイできない
+      CallbackURLs:
+        - !Sub 'https://${WebDistribution.DomainName}/'
+      LogoutURLs:
+        - !Sub 'https://${WebDistribution.DomainName}/'
+      # ID トークンの有効期限。短いほど安全だが、切れるたびに入り直しになる
+      IdTokenValidity: 60
+      AccessTokenValidity: 60
+      RefreshTokenValidity: 1
+      TokenValidityUnits:
+        IdToken: minutes
+        AccessToken: minutes
+        RefreshToken: days
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+
+  # ログイン画面（ホスト UI）。**自分でログイン画面を作らなくて済む**
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      # ドメイン名は世界中で一意。アカウント ID を付けて衝突を避ける
+      Domain: !Sub '${StudentId}-auth-${AWS::AccountId}'
+      UserPoolId: !Ref UserPool
+
+# ----------------------------------------------------------------------------
+# デプロイが終わったあとに表示される値。
+# **この7つを deploy_web.py が読んで config.json を作る。**手で書き写さない
+# ----------------------------------------------------------------------------
+Outputs:
+  WebUrl:
+    Description: 公開 URL。ブラウザで開くとログイン画面が出る
+    Value: !Sub 'https://${WebDistribution.DomainName}'
+
+  WebBucketName:
+    Description: 画面の置き場。deploy_web.py がここへ index.html と config.json を置く
+    Value: !Ref WebBucket
+
+  DistributionId:
+    Description: CloudFront の ID。キャッシュを消すときに使う
+    Value: !Ref WebDistribution
+
+  FunctionUrl:
+    Description: API の宛先。画面がここへ /api/chat を送る
+    Value: !GetAtt AgentFunctionUrl.FunctionUrl
+
+  UserPoolId:
+    Description: Cognito のユーザープール ID
+    Value: !Ref UserPool
+
+  UserPoolClientId:
+    Description: Cognito のアプリクライアント ID
+    Value: !Ref UserPoolClient
+
+  CognitoDomain:
+    Description: ログイン画面の URL
+    Value: !Sub 'https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com'
+
+  FunctionName:
+    Description: Lambda 関数の名前。aws logs tail で使う
+    Value: !Ref AgentFunction
+
+  LogGroupName:
+    Description: ログの置き場。aws logs tail <この名前> --follow
+    Value: !Ref AgentLogGroup

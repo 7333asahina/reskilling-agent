@@ -1,0 +1,27 @@
+# sam build / sam deploy の既定値。make_samconfig.py が作った。
+# 毎回長いオプションを打たなくて済むように、ここに持たせる。
+version = 0.1
+
+[default.global.parameters]
+stack_name = "asahina-2611-agent"
+region = "ap-northeast-1"
+
+[default.build.parameters]
+cached = true
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = false
+s3_bucket = "asahina-2611-sam-477537078649"
+s3_prefix = "asahina-2611-agent"
+image_repositories = ["AgentFunction=477537078649.dkr.ecr.ap-northeast-1.amazonaws.com/asahina-2611-agent"]
+parameter_overrides = [
+  "StudentId=asahina-2611",
+  # 画面の上に出す名前。**ここを書き換えて sam deploy すると、コードを触らずに画面が変わる**（第4回 03 の 2-11）。
+  # 空白を含むので、値は引用符で囲む。囲みを外すと空白の手前で切れる
+  "AppName=\"AI実践研修 エージェント＠\"",
+  "PermissionsBoundaryArn=arn:aws:iam::477537078649:policy/reskilling-student-boundary",
+]
+# **StudentId のタグは消さないこと。** CloudFront と Cognito は名前で絞れないので、
+# 「自分のものか」をこのタグで確かめている。無いと作成が拒否される
+tags = "Project=reskilling Owner=asahina-2611 StudentId=asahina-2611"

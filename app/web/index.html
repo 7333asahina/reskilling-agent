@@ -217,7 +217,7 @@
   <header>
     <div class="icon">AI</div>
     <div class="head-text">
-      <div class="name">の秘書</div>
+      <div class="name">AI実践研修 エージェント</div>
       <div class="desc" id="subtitle">ローカル / echo</div>
     </div>
     <div class="head-right">
@@ -242,8 +242,7 @@
     <div class="day" id="today"></div>
   </div>
 
-  <div id="samples">
-  </div>
+  <div id="samples"></div>
 
   <form id="form">
     <textarea id="message" rows="1" placeholder="メッセージを入力" autofocus></textarea>
@@ -459,10 +458,6 @@
   }
   document.getElementById("reset").addEventListener("click", resetConversation);
 
-  // 定型質問のボタンを押したら、その場で送る
-  // document.querySelectorAll("#samples button").forEach(b => {
-  //   b.addEventListener("click", () => { box.value = b.textContent; send(); });
-  // });
   // 定型質問のボタンを、サーバの /api/suggestions から作る
   async function loadSuggestions() {
     const res = await fetch(`${apiBase()}/api/suggestions`);
@@ -477,7 +472,6 @@
       bar.appendChild(b);
     }
   }
-
 
   // 入力欄を中身の量に合わせて伸ばす
   box.addEventListener("input", () => {
@@ -604,11 +598,25 @@
     addMessage("ai", "こんにちは。何かお手伝いできることはありますか。\n下のボタンを押すとそのまま質問できます。");
   }
 
+  async function showWhereItRuns() {
+    try {
+      const res = await fetch(`${apiBase()}/healthz`);
+      const h = await res.json();
+      window.runningAt = `${h.env} / ${h.student_id}`;
+      document.getElementById("subtitle").textContent = window.runningAt;
+    } catch (_) {
+      // 読めなくても画面は動かす
+    }
+  }
+
   // 画面の準備ができたときに、boot() から1回だけ呼ばれる。
   // **API を呼ぶ処理は、ここから呼ぶ。**これより前は apiBase() の宛先がまだ決まっていない。
   function onReady() {
     greet();
+    showWhereItRuns();
     loadSuggestions();
+
+
   }
 
   // **onReady() を直接呼ばない。**ログインの確認が済んでから boot() が呼ぶ
