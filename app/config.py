@@ -1,7 +1,7 @@
-"""アプリの設定をまとめて読む場所。
+"""アプリの設定をまとめて読む場所（第4回版。app/config.py を丸ごと差し替える）。
 
 設定値はすべて環境変数から読む。コードに直接書かない。
-ローカルでは .env ファイル、AWS では Lambda の環境変数から渡ってくる（第4回）。
+ローカルでは .env ファイル、AWS では Lambda の環境変数（template.yaml で定義）から渡ってくる。
 .env が無ければ、ここに書いた既定値で動く。
 """
 
@@ -27,8 +27,18 @@ class Settings(BaseSettings):
     # ログの細かさ。INFO / DEBUG / WARNING
     log_level: str = "INFO"
 
-    # 使うリージョン。東京に固定する（第1回 04 の 1-3）
+    # --- 第4回で増えたもの ---
+
+    # AWS のリージョン。Secrets Manager を読むときに使う（第5回で Bedrock にも使う）
     aws_region: str = "ap-northeast-1"
+
+    # 鍵そのもの。**手元の .env にだけ書く。**コードにも Git にも入れない。
+    # AWS では空のままにして、下の「鍵の名前」から Secrets Manager を読む
+    demo_api_key: str = ""
+
+    # 鍵の名前（Secrets Manager 上の名前）。AWS ではこちらを template.yaml から渡す
+    demo_api_key_secret_name: str = ""
+
 
     # ---- ログイン（第4回で有効になる）------------------------------------
     # 手元（uvicorn）では False のまま。ログインせずに画面を触れる。
