@@ -1,4 +1,4 @@
-"""アプリの設定をまとめて読む場所（第4回版。app/config.py を丸ごと差し替える）。
+"""アプリの設定をまとめて読む場所（第5回版。app/config.py を丸ごと差し替える）。
 
 設定値はすべて環境変数から読む。コードに直接書かない。
 ローカルでは .env ファイル、AWS では Lambda の環境変数（template.yaml で定義）から渡ってくる。
@@ -29,15 +29,25 @@ class Settings(BaseSettings):
 
     # --- 第4回で増えたもの ---
 
-    # AWS のリージョン。Secrets Manager を読むときに使う（第5回で Bedrock にも使う）
+    # AWS のリージョン。Secrets Manager と Bedrock を呼ぶときに使う
     aws_region: str = "ap-northeast-1"
 
-    # 鍵そのもの。**手元の .env にだけ書く。**コードにも Git にも入れない。
-    # AWS では空のままにして、下の「鍵の名前」から Secrets Manager を読む
+    # 鍵そのもの。**手元の .env にだけ書く。**コードにも Git にも入れない
     demo_api_key: str = ""
 
-    # 鍵の名前（Secrets Manager 上の名前）。AWS ではこちらを template.yaml から渡す
+    # 鍵の名前（Secrets Manager 上の名前）。AWS ではこちらだけ template.yaml から渡す
     demo_api_key_secret_name: str = ""
+
+    # --- 第5回で増えたもの ---
+
+    # 使う LLM。安いものに固定する。ここを高いモデルに変えると単価が17倍になる
+    bedrock_model_id: str = "amazon.nova-lite-v1:0"
+
+    # 1回の応答で生成させる最大トークン数。長文暴走の歯止め。公開 URL の裏にあるので必ず上限を持つ
+    max_tokens: int = 1024
+
+    # 応答のばらつき。0 に近いほど毎回同じ答えになる
+    temperature: float = 0.3
 
 
     # ---- ログイン（第4回で有効になる）------------------------------------
