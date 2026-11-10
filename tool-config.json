@@ -1,0 +1,19 @@
+{
+  "tools": [
+    {
+      "toolSpec": {
+        "name": "get_current_time",
+        "description": "現在の日付と時刻を返す。「いま何時」「今日は何日」など、現在時刻を知らないと答えられない質問のときに使う。",
+        "inputSchema": {
+          "json": {
+            "type": "object",
+            "properties": {
+              "timezone": {"type": "string", "description": "タイムゾーン。JST か UTC。", "enum": ["JST", "UTC"]}
+            },
+            "required": []
+          }
+        }
+      }
+    }
+  ]
+}

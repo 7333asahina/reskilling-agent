@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  AI実践研修 エージェント（第5回時点）。FastAPI のコンテナを Lambda で動かし、
+  AI実践研修 エージェント（第6回時点）。FastAPI のコンテナを Lambda で動かし、
   画面は S3 に置いて CloudFront から配る。入口には Cognito のログインを付ける。
   すべてのリソース名は StudentId で始まる。**すべて DeletionPolicy: Delete。**
   スタックを消せば跡形も残らない（ECR と作業用 S3 は別。03-デプロイ手順書 §5）。
@@ -95,6 +95,9 @@ Resources:
           BEDROCK_MODEL_ID: !Ref BedrockModelId
           MAX_TOKENS: '1024'
           TEMPERATURE: '0.3'
+          CONVERSATION_TABLE: !Ref ConversationTable
+          MAX_HISTORY_MESSAGES: '20'
+          HISTORY_TTL_DAYS: '7'
       FunctionUrlConfig:
         # NONE にする。**認証が無いという意味ではない。**
         # 関数 URL が選べるのは AWS_IAM か NONE の2つだけで、Cognito のオーソライザーが無い。
@@ -129,6 +132,15 @@ Resources:
             - Effect: Allow
               Action: bedrock:InvokeModel
               Resource: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}'
+        # --- 第6回：DynamoDB ---
+        # 「DynamoDB を使う」ではなく「このテーブルの読み書き」まで絞る。Scan（全件読み）も Query も要らない
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:DeleteItem
+              Resource: !GetAtt ConversationTable.Arn
       Tags:
         Project: reskilling
         Owner: !Ref StudentId
@@ -137,6 +149,36 @@ Resources:
       DockerContext: .
       Dockerfile: Dockerfile
       DockerTag: !Sub '${StudentId}-latest'
+
+
+
+  ConversationTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TableName: !Sub '${StudentId}-conversations'
+      # 使った分だけ課金。8人×数日の研修では固定容量にする理由がない
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: user_id,    AttributeType: S }
+        - { AttributeName: session_id, AttributeType: S }
+      KeySchema:
+        # 利用者 ID を鍵の先頭に置く。第6回は全員 anonymous。第14回でログインした人の ID になる
+        - { AttributeName: user_id,    KeyType: HASH }
+        - { AttributeName: session_id, KeyType: RANGE }
+      TimeToLiveSpecification:
+        # expires_at（UNIX 秒）を過ぎた項目を AWS が消す。会話履歴を無期限に貯めない
+        AttributeName: expires_at
+        Enabled: true
+      Tags:
+        - { Key: Project, Value: reskilling }
+        - { Key: Owner,   Value: !Ref StudentId }
+
+  # --- 関数 URL を誰でも呼べるようにする許可 ----------------------------------
+  # AuthType: NONE と書いただけでは呼べない。「誰が呼べるか」の許可を2つ足す。
+  # 2025年10月から、InvokeFunctionUrl と InvokeFunction の両方が要る。
+  # どちらが欠けても返るのは同じ 403 Forbidden なので、片方だけ付けて詰まる。
 
   # --- 関数 URL を誰でも呼べるようにする許可 ----------------------------------
   # AuthType: NONE と書いただけでは呼べない。「誰が呼べるか」の許可を2つ足す。
@@ -358,3 +400,7 @@ Outputs:
   LogGroupName:
     Description: ログの置き場。aws logs tail <この名前> --follow
     Value: !Ref AgentLogGroup
+
+  ConversationTableName:
+    Description: 会話履歴のテーブル名。手元の .env の CONVERSATION_TABLE に書く（第6回）
+    Value: !Ref ConversationTable

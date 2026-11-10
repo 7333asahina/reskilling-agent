@@ -1,0 +1,9 @@
+[
+  {"role": "user", "content": [{"text": "いま何時？"}]},
+  {"role": "assistant", "content": [
+    {"toolUse": {"toolUseId": "PASTE_TOOL_USE_ID", "name": "get_current_time", "input": {"timezone": "JST"}}}
+  ]},
+  {"role": "user", "content": [
+    {"toolResult": {"toolUseId": "PASTE_TOOL_USE_ID", "content": [{"json": {"timezone": "JST", "readable": "2026年10月08日 15時30分", "weekday": "木曜日"}}]}}
+  ]}
+]

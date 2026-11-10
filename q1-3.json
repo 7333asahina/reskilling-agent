@@ -1,0 +1,21 @@
+{
+    "output": {
+        "message": {
+            "role": "assistant",
+            "content": [
+                {
+                    "text": "- 今日の日は10月10日です。\n- 明後日は水曜日です。\n- 天気は晴れです。"
+                }
+            ]
+        }
+    },
+    "stopReason": "end_turn",
+    "usage": {
+        "inputTokens": 60,
+        "outputTokens": 32,
+        "totalTokens": 92
+    },
+    "metrics": {
+        "latencyMs": 282
+    }
+}

@@ -1,4 +1,4 @@
-"""アプリの設定をまとめて読む場所（第5回版。app/config.py を丸ごと差し替える）。
+"""アプリの設定をまとめて読む場所（第6回版。app/config.py を丸ごと差し替える）。
 
 設定値はすべて環境変数から読む。コードに直接書かない。
 ローカルでは .env ファイル、AWS では Lambda の環境変数（template.yaml で定義）から渡ってくる。
@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # --- 第4回で増えたもの ---
 
-    # AWS のリージョン。Secrets Manager と Bedrock を呼ぶときに使う
+    # AWS のリージョン。Secrets Manager・Bedrock・DynamoDB を呼ぶときに使う
     aws_region: str = "ap-northeast-1"
 
     # 鍵そのもの。**手元の .env にだけ書く。**コードにも Git にも入れない
@@ -48,6 +48,19 @@ class Settings(BaseSettings):
 
     # 応答のばらつき。0 に近いほど毎回同じ答えになる
     temperature: float = 0.3
+
+    # --- 第6回で増えたもの ---
+
+    # 会話履歴の置き場（DynamoDB のテーブル名）。**空なら履歴を使わない**（第5回と同じ1問1答）。
+    # 手元は .env に、AWS は template.yaml から渡す。同じ名前を書けば手元と AWS が同じ履歴を読む
+    conversation_table: str = ""
+
+    # モデルに送る過去の発言の上限（件数）。1往復 ＝ user と assistant の2件なので、20 なら10往復ぶん。
+    # 多いほど文脈は続くが、毎回の inputTokens が増える（＝ 料金が増える）
+    max_history_messages: int = 20
+
+    # 何日で自動的に消すか（DynamoDB の TTL）
+    history_ttl_days: int = 7
 
 
     # ---- ログイン（第4回で有効になる）------------------------------------
