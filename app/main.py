@@ -24,7 +24,7 @@ from app.auth import current_user
 from app.config import settings
 from app.logging_conf import setup_logging
 from app.secrets import demo_api_key
-from app.llm import ask
+from app.agent import run_agent
 
 from app import history
 
@@ -113,32 +113,30 @@ def config() -> dict:
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, user: dict[str, Any] = Depends(current_user)) -> ChatResponse:
-    """これまでの会話を読み、今回の発言を足して LLM に送り、答えを返して、会話を保存する。"""
+    """これまでの会話を読み、エージェントを回して答えを返し、会話を保存する。"""
     logger.info("chat request received", extra={"extra_fields": {
         "chars": len(req.message), "session_id": req.session_id, "user": user.get("sub", "")}})
 
-    # 1. 読む。CONVERSATION_TABLE が空なら [] が返り、第5回と同じ1問1答になる
+    # 1. 読む。CONVERSATION_TABLE が空なら [] が返る
     past = history.load(req.session_id)
 
-    # 2. 送る。system と past は ask() の中で messages に積まれる
+    # 2. 回す。1ターンで終わることも、tool を使って2ターンすることもある
     try:
-        result = ask(req.message, past)
+        result = run_agent(req.message, past)
     except ClientError as e:
-        # AWS が返してきたエラー。権限不足・モデル未有効化・混雑など。
-        # 中身をそのまま画面に出すと情報が漏れるので、ログには全部、画面には種別だけ
         code = e.response.get("Error", {}).get("Code", "Unknown")
         logger.exception("bedrock call failed", extra={"extra_fields": {"error_code": code}})
         if code == "ThrottlingException":
             raise HTTPException(status_code=429, detail="混み合っています。少し待って再送してください") from e
         raise HTTPException(status_code=502, detail=f"モデルの呼び出しに失敗しました（{code}）") from e
 
-    # 3. 保存する。今回の発言とモデルの答えを後ろに足す。切り詰めは history.save の中で行う
-    history.save(req.session_id, past + [
-        {"role": "user", "content": [{"text": req.message}]},
-        result["assistant_message"],
-    ])
+    # 3. 保存する。**tool の往復（toolUse・toolResult）も含めて丸ごと残す。**
+    #    run_agent が返す messages は、これまでの会話＋今回の往復の全部になっている
+    history.save(req.session_id, result["messages"])
 
     logger.info("chat request completed", extra={"extra_fields": {
+        "turns": result["turns"],
+        "tools_used": result["tools_used"],
         "input_tokens": result["input_tokens"],
         "output_tokens": result["output_tokens"],
         "stop_reason": result["stop_reason"],
@@ -148,7 +146,8 @@ def chat(req: ChatRequest, user: dict[str, Any] = Depends(current_user)) -> Chat
 
     return ChatResponse(
         reply=result["reply"],
-        turns=1,
+        turns=result["turns"],
+        tools_used=result["tools_used"],
         input_tokens=result["input_tokens"],
         output_tokens=result["output_tokens"],
         elapsed_ms=result["elapsed_ms"],
