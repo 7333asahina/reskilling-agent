@@ -1,4 +1,4 @@
-"""エージェントの本体（第7回。app/agent.py として新しく置き、app/llm.py は消す）。
+"""エージェントの本体（第8回版。app/agent.py を丸ごと差し替える）。
 
 **エージェントと呼んでいるものの正体は、この関数の中の for ループひとつ。**
 
@@ -10,10 +10,13 @@
 第6回に CLI で手でやった往復と同じ。違うのは messages を組み立てるのが自分ではないことだけ。
 魔法は無い。止める条件（MAX_AGENT_TURNS）を人間が決めているのも、この形だから。
 
-第6回の llm.py との違いは3つ。
-  1. toolConfig を毎ターン渡す（app/tools.py）
-  2. stopReason が tool_use の間まわる（llm.py は1回で返していた）
-  3. モデルの考えた過程（<thinking>）を落としてから画面と履歴に渡す
+第7回版との違いは2か所だけ。
+
+  1. モデルに渡す一覧が「手元の tool ＋ MCP サーバーの tool」になった
+  2. 名前が返ってきたとき、手元か MCP かを振り分けてから動かすようになった
+
+**モデルから見れば区別はありません。**渡すのは同じ toolSpec で、返ってくるのは同じ toolUse です。
+振り分けているのはこちら側で、どこで動くかはこちらの都合です。
 """
 
 import logging
@@ -26,6 +29,7 @@ from botocore.config import Config
 
 from app.config import settings
 from app.prompt import build_system_prompt
+from app import mcp_client
 from app.tools import all_tool_specs, run_tool
 
 logger = logging.getLogger(__name__)
@@ -86,8 +90,9 @@ def run_agent(message: str, history: list[dict[str, Any]] | None = None) -> dict
     total_in = total_out = 0
     tools_used: list[str] = []
 
-    # `tool` の一覧と system はターンの前に1回だけ用意して、まわるあいだ使い回す
-    tool_specs = all_tool_specs()
+    # `tool` の一覧と system はターンの前に1回だけ用意して、まわるあいだ使い回す。
+    # **手元の一覧に、MCP サーバーの一覧をそのまま足す。**モデルには区別が付かない
+    tool_specs = all_tool_specs() + mcp_client.list_tools()
     system = [{"text": build_system_prompt()}]
 
     for turn in range(1, settings.max_agent_turns + 1):
@@ -137,7 +142,11 @@ def run_agent(message: str, history: list[dict[str, Any]] | None = None) -> dict
                 continue
             use = block["toolUse"]
             tools_used.append(use["name"])
-            result = run_tool(use["name"], use["input"])
+            # 手元に無ければ MCP サーバーに投げる。どちらに投げるかはここだけの判断
+            if mcp_client.has(use["name"]):
+                result = mcp_client.call_tool(use["name"], use["input"])
+            else:
+                result = run_tool(use["name"], use["input"])
             tool_results.append({
                 "toolResult": {"toolUseId": use["toolUseId"], "content": [{"json": result}]}
             })
