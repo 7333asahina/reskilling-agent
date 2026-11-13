@@ -3,10 +3,9 @@
   "id": 3,
   "method": "tools/call",
   "params": {
-    "name": "list_events",
+    "name": "search_people",
     "arguments": {
-      "start_date": "2026-11-12",
-      "end_date": "2026-11-16"
+      "keyword": "営業部の部長の内線番号を教えて"
     }
   }
 }

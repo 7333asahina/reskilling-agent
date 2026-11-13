@@ -1,9 +1,10 @@
-"""器そのもののテスト（第8回版。tests/test_health.py を丸ごと差し替える）。
+"""器そのもののテスト（第9回版。tests/test_health.py を丸ごと差し替える）。
 
 **ネットワークには一切出ない。**エージェントを回す run_agent() と、DynamoDB を読む history.load() を
 偽物に差し替えてから叩く。確かめているのは器：ターン数と tool の名前が画面に返ること、
 tool の往復を含む会話が丸ごと保存されること。
-第8回で2件増えて 11 件になる。MCP サーバーにも繋ぎにいかない（mcp_client を偽物に差し替える）。
+第9回で3件増えて 14 件になる。**MCP サーバーにも繋ぎにいかない**（`mcp_client` を偽物に差し替え、
+名簿の検索は関数を直接呼ぶ）。
 """
 
 import pytest
@@ -11,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from app import history, mcp_client
 from app.main import app
+from directory_mcp.main import TOOLS as DIRECTORY_TOOLS, get_person, search_people
 from app.tools import all_tool_specs, run_tool
 
 client = TestClient(app)
@@ -150,3 +152,38 @@ def test_mcp_failure_does_not_break_local_tools(monkeypatch):
     monkeypatch.setattr(mcp_client, "list_tools", lambda: [])
     assert [t["toolSpec"]["name"] for t in all_tool_specs()] == ["get_current_time"]
     assert run_tool("get_current_time", {"timezone": "JST"})["timezone"] == "JST"
+
+
+# ---------- 第9回で増えたもの ----------
+
+def test_directory_server_publishes_two_tools():
+    """自分で書いた MCP サーバーが、`tools/list` で返す `tool` が2つあること。
+
+    名前は第8回で繋いだ3つ（`search_mail`・`get_message`・`list_events`）と重なっていない。
+    重なると、モデルはどちらを指しているか言えない（第8回 T-115）。
+    """
+    names = [t["name"] for t in DIRECTORY_TOOLS]
+    assert names == ["search_people", "get_person"]
+    assert not set(names) & {"search_mail", "get_message", "list_events"}
+
+
+def test_search_people_finds_by_department_and_title():
+    """部署と役職をつなげて渡しても引けること。
+
+    **モデルは「経営企画部の部長」のようにつなげて渡してくる。**
+    つなげたまま照合すると0件になり、いる人を「いません」と答えてしまう。
+    """
+    hit = search_people("営業部の部長")
+    assert hit["count"] == 1
+    assert hit["people"][0]["dept"] == "営業部"
+    assert hit["people"][0]["title"] == "部長"
+
+
+def test_search_people_returns_zero_when_absent():
+    """いない人は0件で返せること。
+
+    **文字で探しているからできる。**意味で探すベクトル検索は、必ず一番近いものを返すので、
+    「いません」と言い切れない（第12回で扱います）。
+    """
+    assert search_people("存在しない部署")["count"] == 0
+    assert get_person("E999")["found"] is False

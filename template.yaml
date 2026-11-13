@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  AI実践研修 エージェント（第6回時点）。FastAPI のコンテナを Lambda で動かし、
+  AI実践研修 エージェント（第9回時点）。FastAPI のコンテナを Lambda で動かし、
   画面は S3 に置いて CloudFront から配る。入口には Cognito のログインを付ける。
   すべてのリソース名は StudentId で始まる。**すべて DeletionPolicy: Delete。**
   スタックを消せば跡形も残らない（ECR と作業用 S3 は別。03-デプロイ手順書 §5）。
@@ -27,6 +27,36 @@ Parameters:
     Default: amazon.nova-lite-v1:0
     Description: 使う LLM。安いものに固定する。IAM の権限もこのモデル1つに絞られる（第5回）
 
+  # --- 第9回：MCP サーバー -----------------------------------------------------
+
+  McpUrl:
+    Type: String
+    Default: 'https://bw4rm4o7egp6nzp3oi6jh5ebzq0wdykr.lambda-url.ap-northeast-1.on.aws/'
+    Description: >
+      ファイブ社の Gmail・カレンダーの MCP サーバーの関数 URL（別 Lambda）。
+      **手元の .env に書いた MCP_URLS の1本目と同じもの**（第8回）。
+      32文字のでたらめな文字列なので手で打たせない。既定値に入れてある。空なら繋がない
+
+  McpFunctionArn:
+    Type: String
+    Default: 'arn:aws:lambda:ap-northeast-1:477537078649:function:s00-mcp-server'
+    Description: >
+      上の MCP サーバーの Lambda ARN。**呼び出し権限をその1つに絞るために使う。**
+      手元から呼ぶときは自分の IAM ユーザーが署名していた。デプロイすると署名するのは
+      Lambda のロールになる。主体が変わるので、権限を付け直す（第9回 03 の 4-1）
+
+  DirectoryMcpPort:
+    Type: String
+    Default: '8081'
+    AllowedPattern: '^([0-9]{4,5})?$'
+    Description: >
+      自分で書いた社内名簿の MCP サーバーが待つポート。
+      **同じコンテナの中で別プロセスとして動く。**AWS のリソースではないので
+      ARN も権限も要らない。127.0.0.1 に縛ってあり、外からは到達できない。
+
+      **ポート番号はここだけに書く。**起動する側（start.sh）も、繋ぎに行く側
+      （MCP_URLS）も、この1つから組み立てる。2か所に書くと、片方だけ変えて壊れる
+
   RequireAuth:
     Type: String
     Default: 'true'
@@ -43,6 +73,10 @@ Parameters:
       これが無いと、自分より強いロールを作れてしまうので、IAM 側で作成が拒否される
 
 Conditions:
+  # 関数 URL が空なら、権限も足さない。**使わないものに権限を付けない**
+  HasMcp: !Not [!Equals [!Ref McpFunctionArn, '']]
+  HasDirectoryMcp: !Not [!Equals [!Ref DirectoryMcpPort, '']]
+  # 関数 URL が空なら、権限も足さない。**使わないものに権限を付けない**
   HasBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, '']]
 
 Globals:
@@ -88,16 +122,31 @@ Resources:
           LOG_LEVEL: INFO
           # 鍵そのものではなく「鍵の名前」だけを渡す。値は Secrets Manager から実行時に読む
           DEMO_API_KEY_SECRET_NAME: !Sub '${StudentId}/demo-api-key'
+          # --- 第5回：LLM ---
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          # 公開 URL の裏に LLM がある。1回の応答の上限をここで持つ（app/config.py の max_tokens）
+          MAX_TOKENS: '1024'
+          TEMPERATURE: '0.3'
+          # --- 第6回：会話履歴 ---
+          # 履歴の置き場（DynamoDB のテーブル名）。手元の .env にも同じ名前を書くと、手元と AWS が同じ履歴を読む
+          CONVERSATION_TABLE: !Ref ConversationTable
+          # モデルに送る過去の発言の上限（件数）。多いほど文脈は続くが、毎回の inputTokens が増える
+          MAX_HISTORY_MESSAGES: '20'
+          # 何日で自動的に消すか（DynamoDB の TTL）
+          HISTORY_TTL_DAYS: '7'
+          # --- 第9回：MCP サーバー ---
+          # 関数 URL と http://127.0.0.1:8081 を、カンマでつないで渡す。
+          # **手元の .env の MCP_URLS と同じ形。**繋ぎ先を足すのに変えるのはここだけ
+          MCP_URLS: !Join
+            - ','
+            - - !Ref McpUrl
+              - !If [HasDirectoryMcp, !Sub 'http://127.0.0.1:${DirectoryMcpPort}', '']
+          # start.sh がこのポートで名簿サーバーを起こす。上の MCP_URLS と同じ値から作る
+          DIRECTORY_MCP_PORT: !Ref DirectoryMcpPort
           # ログインを確かめるのに要る3つ。**アプリの中で自分で検証する**（app/auth.py）
           REQUIRE_AUTH: !Ref RequireAuth
           COGNITO_USER_POOL_ID: !Ref UserPool
           COGNITO_CLIENT_ID: !Ref UserPoolClient
-          BEDROCK_MODEL_ID: !Ref BedrockModelId
-          MAX_TOKENS: '1024'
-          TEMPERATURE: '0.3'
-          CONVERSATION_TABLE: !Ref ConversationTable
-          MAX_HISTORY_MESSAGES: '20'
-          HISTORY_TTL_DAYS: '7'
       FunctionUrlConfig:
         # NONE にする。**認証が無いという意味ではない。**
         # 関数 URL が選べるのは AWS_IAM か NONE の2つだけで、Cognito のオーソライザーが無い。
@@ -141,6 +190,20 @@ Resources:
                 - dynamodb:PutItem
                 - dynamodb:DeleteItem
               Resource: !GetAtt ConversationTable.Arn
+        # --- 第9回：MCP サーバーを関数 URL 経由で呼ぶ ---
+        # **その1つの関数だけ。**ほかの Lambda は呼べない。
+        # 2025年10月から InvokeFunctionUrl と InvokeFunction の両方が要る。
+        # どちらが欠けても返るのは同じ 403 なので、片方だけ付けて詰まる。
+        # **127.0.0.1 のほうには権限が要らない。**AWS のサービスではないため
+        - !If
+          - HasMcp
+          - Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunctionUrl
+                  - lambda:InvokeFunction
+                Resource: !Ref McpFunctionArn
+          - !Ref 'AWS::NoValue'
       Tags:
         Project: reskilling
         Owner: !Ref StudentId

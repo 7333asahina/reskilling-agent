@@ -1,4 +1,4 @@
-# 第4回で使う。このアプリを AWS Lambda のコンテナイメージとして動かすための定義。
+# 第4回で作り、第9回で2プロセス起動に差し替えた。AWS Lambda のコンテナイメージの定義。
 #
 # ふつうの FastAPI アプリ（uvicorn で 8080 番を待つ）を、そのまま Lambda に載せるための
 # 仕掛けが Lambda Web Adapter。Lambda が受け取ったイベントを HTTP リクエストに変換して
@@ -27,10 +27,14 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
+# 第9回で増えた。社内名簿の MCP サーバーと、uvicorn を2本起こす起動スクリプト
+COPY directory_mcp/ ./directory_mcp/
+COPY start.sh .
 
 # root 以外のユーザーで動かす
 RUN useradd --create-home --uid 1000 appuser
 USER appuser
 
 EXPOSE 8080
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# 第8回までは uvicorn を直接起動していた。第9回から start.sh が2本起こす
+CMD ["sh", "start.sh"]

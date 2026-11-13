@@ -15,7 +15,7 @@ from app.tools import all_tool_specs
 
 client = boto3.client("bedrock-runtime", region_name=settings.aws_region)
 system = [{"text": build_system_prompt()}]
-question = [{"role": "user", "content": [{"text": "今週の予定を教えて"}]}]
+question = [{"role": "user", "content": [{"text": "営業部の部長の内線番号を教えて"}]}]
 
 # **本数はハードコードしない。**第8回は MCP が3つだが、第9回で社内名簿が2つ増え、
 # 名簿サーバーを起こしているかどうかでも変わる。数えたものをそのまま出す
