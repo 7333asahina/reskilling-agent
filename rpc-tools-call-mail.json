@@ -1,0 +1,12 @@
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "tools/call",
+  "params": {
+    "name": "search_mail",
+    "arguments": {
+      "query": "after:2026-09-18",
+      "limit": 3
+    }
+  }
+}

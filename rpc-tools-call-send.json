@@ -1,0 +1,13 @@
+{
+  "jsonrpc": "2.0",
+  "id": 6,
+  "method": "tools/call",
+  "params": {
+    "name": "send_mail",
+    "arguments": {
+      "to": "tanaka@example.com",
+      "subject": "テスト",
+      "body": "テスト"
+    }
+  }
+}

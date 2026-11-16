@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "method": "tools/call",
+  "params": {
+    "name": "get_message",
+    "arguments": {
+      "message_id": "1a1de6fff8c50232"
+    }
+  }
+}
