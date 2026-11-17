@@ -56,7 +56,14 @@ def trim(messages: list[dict[str, Any]], max_messages: int) -> list[dict[str, An
     （tool の往復が入ると切り方がもう1段むずかしくなる。第12回）
     """
     cut = messages[-max_messages:] if len(messages) > max_messages else list(messages)
-    while cut and cut[0].get("role") != "user":
+    while cut:
+        first = cut[0]
+        has_tool_result = any(
+            "toolResult" in block
+            for block in first.get("content", [])
+            )
+        if first.get("role") == "user" and not has_tool_result:
+            break
         cut.pop(0)
 
     dropped = len(messages) - len(cut)
